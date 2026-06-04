@@ -566,3 +566,21 @@ export {
   getActivityEventStats,
 } from "./query-activity-events.js";
 export type { ActivityEventFilter, ActivityEventStats } from "./query-activity-events.js";
+
+// Verification gate — verdict system of record (eval / leaderboard)
+export {
+  recordVerification,
+  getLatestVerification,
+  listVerifications,
+  getAgentVerificationStats,
+  getVerificationDb,
+  isVerificationDbAvailable,
+  closeVerificationDb,
+} from "./verification-db.js";
+export type {
+  VerificationVerdict,
+  VerificationRecord,
+  VerificationRecordInput,
+  ListVerificationsFilter,
+  AgentVerificationStats,
+} from "./verification-db.js";
