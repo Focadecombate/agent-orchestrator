@@ -23,6 +23,7 @@ import {
   type Session,
   type SessionManager,
 } from "../types.js";
+import type { VerificationRecordInput } from "../verification-db.js";
 
 let storeDir: string;
 let store: CodeReviewStore;
@@ -367,6 +368,73 @@ describe("executeCodeReviewRun", () => {
       filePath: "src/save.ts",
       startLine: 12,
     });
+  });
+
+  it("records a blocked verdict to the eval store when the gate is enabled", async () => {
+    const run = store.createRun({
+      linkedSessionId: "app-1",
+      reviewerSessionId: "app-rev-1",
+      status: "queued",
+      targetSha: "abc123",
+    });
+    const gatedConfig: OrchestratorConfig = {
+      ...config,
+      review: { url: "http://localhost:8088/review" },
+    };
+    const verdicts: VerificationRecordInput[] = [];
+
+    await executeCodeReviewRun(
+      {
+        config: gatedConfig,
+        sessionManager: makeSessionManager(makeSession({ metadata: { agent: "claude-code" } })),
+        storeFactory: () => store,
+        prepareWorkspace: async () => "/tmp/reviews/app-rev-1",
+        recordVerdict: (input) => verdicts.push(input),
+        runReviewer: async () => ({
+          findings: [
+            { severity: "error", title: "bug", body: "boom" },
+            { severity: "warning", title: "nit", body: "meh" },
+          ],
+        }),
+      },
+      { projectId: "app", runId: run.id },
+    );
+
+    expect(verdicts).toHaveLength(1);
+    expect(verdicts[0]).toMatchObject({
+      sessionId: "app-1",
+      prNumber: 7,
+      agent: "claude-code",
+      verifier: "http:localhost:8088",
+      verdict: "blocked",
+      errorCount: 1,
+      warningCount: 1,
+      infoCount: 0,
+      targetSha: "abc123",
+    });
+  });
+
+  it("does not record a verdict when the gate is disabled", async () => {
+    const run = store.createRun({
+      linkedSessionId: "app-1",
+      reviewerSessionId: "app-rev-1",
+      status: "queued",
+    });
+    const verdicts: VerificationRecordInput[] = [];
+
+    await executeCodeReviewRun(
+      {
+        config,
+        sessionManager: makeSessionManager(makeSession()),
+        storeFactory: () => store,
+        prepareWorkspace: async () => "/tmp/reviews/app-rev-1",
+        recordVerdict: (input) => verdicts.push(input),
+        runReviewer: async () => ({ findings: [] }),
+      },
+      { projectId: "app", runId: run.id },
+    );
+
+    expect(verdicts).toHaveLength(0);
   });
 
   it("falls back to the project default branch when the session PR base branch is empty", async () => {

@@ -33,6 +33,7 @@ import {
 } from "./types.js";
 import { resolveAgentSelection } from "./agent-selection.js";
 import { getShell, isWindows, killProcessTree } from "./platform.js";
+import { recordVerification, type VerificationRecordInput } from "./verification-db.js";
 
 const REVIEW_COMMAND_TIMEOUT_MS = 10 * 60_000;
 const REVIEW_COMMAND_MAX_BUFFER = 8 * 1024 * 1024;
@@ -217,6 +218,8 @@ export interface ExecuteCodeReviewRunOptions {
   runReviewer?: CodeReviewRunner;
   /** Shell command from the `--command` flag (highest configuration precedence). */
   reviewCommand?: string;
+  /** Verdict sink for the eval store. Injectable so tests can avoid touching the DB. */
+  recordVerdict?: (input: VerificationRecordInput, tsEpoch?: number) => void;
   now?: () => Date;
   force?: boolean;
 }
@@ -921,6 +924,54 @@ export function resolveCodeReviewRunner({
   return runCodexCodeReview;
 }
 
+/**
+ * Short, bounded-cardinality label for "which backend judged this run" — recorded
+ * as `verifier` in the eval store. Mirrors {@link resolveCodeReviewRunner}'s
+ * precedence so the label tracks the backend that actually ran.
+ */
+export function resolveReviewerLabel({
+  config,
+  project,
+  command,
+}: {
+  config: OrchestratorConfig;
+  project: ProjectConfig;
+  command?: string;
+}): string {
+  if (command) return "command";
+  const review = project.review ?? config.review;
+  if (review?.command) return "command";
+  if (review?.url) {
+    try {
+      return `http:${new URL(review.url).host}`;
+    } catch {
+      return "http";
+    }
+  }
+  if (review?.agent) return review.agent;
+
+  const workerAgent = resolveAgentSelection({
+    role: "worker",
+    project,
+    defaults: config.defaults,
+  }).agentName;
+  if (workerAgent && SUPPORTED_REVIEW_AGENTS.includes(workerAgent)) return workerAgent;
+  return "codex";
+}
+
+function countFindingsBySeverity(findings: CodeReviewRunnerFinding[]): {
+  error: number;
+  warning: number;
+  info: number;
+} {
+  const counts = { error: 0, warning: 0, info: 0 };
+  for (const finding of findings) {
+    const severity = finding.severity ?? "warning";
+    counts[severity]++;
+  }
+  return counts;
+}
+
 /** Verdict of the merge verification gate. `none` means the gate is disabled. */
 export type VerificationVerdict = "pass" | "blocked" | "pending" | "none";
 
@@ -1116,6 +1167,7 @@ export async function executeCodeReviewRun(
     prepareWorkspace = prepareGitReviewerWorkspace,
     runReviewer,
     reviewCommand,
+    recordVerdict = recordVerification,
     now = () => new Date(),
     force = false,
   }: ExecuteCodeReviewRunOptions,
@@ -1197,6 +1249,30 @@ export async function executeCodeReviewRun(
       },
       completedAt,
     );
+
+    // Persist the verdict to the eval store when the gate is enabled. Best-effort
+    // telemetry — never let a store failure fail the review run.
+    if (isVerificationGateEnabled(config, project)) {
+      const counts = countFindingsBySeverity(findings);
+      const startedMs = run.startedAt ? Date.parse(run.startedAt) : NaN;
+      recordVerdict(
+        {
+          projectId,
+          sessionId: session.id,
+          prNumber: run.prNumber ?? session.pr?.number,
+          agent: session.metadata["agent"],
+          verifier: resolveReviewerLabel({ config, project, command: reviewCommand }),
+          verdict: counts.error > 0 ? "blocked" : "pass",
+          errorCount: counts.error,
+          warningCount: counts.warning,
+          infoCount: counts.info,
+          targetSha: run.targetSha,
+          baseSha: run.baseSha,
+          durationMs: Number.isNaN(startedMs) ? undefined : completedAt.getTime() - startedMs,
+        },
+        completedAt.getTime(),
+      );
+    }
   } catch (error) {
     const completedAt = now();
     store.updateRun(
