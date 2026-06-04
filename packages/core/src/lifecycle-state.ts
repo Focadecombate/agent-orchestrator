@@ -95,6 +95,8 @@ const CanonicalSessionLifecycleSchema = z.object({
         "changes_requested",
         "approved",
         "merge_ready",
+        "verifying",
+        "verification_failed",
         "merged",
         "closed_unmerged",
         "cleared_on_restore",

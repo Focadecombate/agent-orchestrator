@@ -737,6 +737,60 @@ export function createShellCodeReviewRunner(command: string): CodeReviewRunner {
   };
 }
 
+async function resolveReviewDiff(workspacePath: string, baseRef: string): Promise<string> {
+  try {
+    return await git(
+      workspacePath,
+      ["diff", "--merge-base", baseRef, "HEAD"],
+      REVIEW_COMMAND_TIMEOUT_MS,
+    );
+  } catch {
+    try {
+      return await git(workspacePath, ["diff", baseRef, "HEAD"], REVIEW_COMMAND_TIMEOUT_MS);
+    } catch {
+      return "";
+    }
+  }
+}
+
+/**
+ * Reviewer backend that POSTs the review context (workspace, base ref, session,
+ * PR number, and the computed diff) to an external HTTP service and parses the
+ * JSON `findings` it returns. The service is expected to honor AO's finding
+ * contract (the shape {@link parseReviewerOutput} consumes).
+ */
+export function createHttpCodeReviewRunner(url: string): CodeReviewRunner {
+  return async (context) => {
+    const diff = await resolveReviewDiff(context.workspacePath, context.baseRef);
+    const payload = {
+      workspace_path: context.workspacePath,
+      base_ref: context.baseRef,
+      session_id: context.session.id,
+      pr_number: context.run.prNumber,
+      agent: context.session.metadata["agent"],
+      diff,
+    };
+
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(REVIEW_COMMAND_TIMEOUT_MS),
+      });
+    } catch (error) {
+      throw new Error(`HTTP reviewer request to ${url} failed`, { cause: error });
+    }
+
+    if (!response.ok) {
+      throw new Error(`HTTP reviewer at ${url} returned ${response.status} ${response.statusText}`);
+    }
+
+    return { rawOutput: (await response.text()).trim() };
+  };
+}
+
 export function buildCodexCodeReviewArgs(outputFile: string, prompt: string): string[] {
   return ["exec", "--sandbox", "read-only", "--output-last-message", outputFile, prompt];
 }
@@ -814,6 +868,7 @@ export const SUPPORTED_REVIEW_AGENTS: readonly string[] = Object.keys(REVIEWER_A
 function reviewerFromConfig(review: ReviewConfig | undefined): CodeReviewRunner | undefined {
   if (!review) return undefined;
   if (review.command) return createShellCodeReviewRunner(review.command);
+  if (review.url) return createHttpCodeReviewRunner(review.url);
   if (review.agent) {
     const adapter = REVIEWER_ADAPTERS[review.agent];
     if (!adapter) {
@@ -830,8 +885,8 @@ function reviewerFromConfig(review: ReviewConfig | undefined): CodeReviewRunner 
  * Resolve the reviewer backend for a run using the documented precedence:
  *
  *   1. explicit `command` (the `--command` CLI flag)
- *   2. per-project `project.review` (command or agent)
- *   3. global `config.review` (command or agent)
+ *   2. per-project `project.review` (command, url, or agent)
+ *   3. global `config.review` (command, url, or agent)
  *   4. the project's worker agent, when it has a known reviewer adapter
  *   5. Codex (final fallback, preserving the original behavior)
  *
@@ -864,6 +919,58 @@ export function resolveCodeReviewRunner({
   if (workerAdapter) return workerAdapter;
 
   return runCodexCodeReview;
+}
+
+/** Verdict of the merge verification gate. `none` means the gate is disabled. */
+export type VerificationVerdict = "pass" | "blocked" | "pending" | "none";
+
+/**
+ * The verification gate is opt-in: it activates only when a `review.url` HTTP
+ * backend is configured (per-project wins over global). With no `review.url`,
+ * verification resolves to `none` everywhere and merge behavior is unchanged.
+ */
+export function isVerificationGateEnabled(
+  config: OrchestratorConfig,
+  project: ProjectConfig,
+): boolean {
+  return Boolean(project.review?.url ?? config.review?.url);
+}
+
+const PENDING_REVIEW_RUN_STATUSES: ReadonlySet<CodeReviewRunStatus> = new Set([
+  "queued",
+  "preparing",
+  "running",
+]);
+
+/**
+ * Compute the verification verdict for a session from its latest code-review run:
+ *   - gate disabled            -> `none`
+ *   - no run yet / in progress -> `pending`
+ *   - open error-severity find -> `blocked`
+ *   - otherwise (clean)        -> `pass`
+ */
+export function resolveSessionVerification({
+  config,
+  project,
+  session,
+  storeFactory = createCodeReviewStore,
+}: {
+  config: OrchestratorConfig;
+  project: ProjectConfig;
+  session: Session;
+  storeFactory?: (projectId: string) => CodeReviewStore;
+}): VerificationVerdict {
+  if (!isVerificationGateEnabled(config, project)) return "none";
+
+  const store = storeFactory(session.projectId);
+  const [latest] = store.listRuns({ linkedSessionId: session.id });
+  if (!latest) return "pending";
+  if (PENDING_REVIEW_RUN_STATUSES.has(latest.status)) return "pending";
+
+  const hasOpenError = store
+    .listFindings({ runId: latest.id, status: "open" })
+    .some((finding) => finding.severity === "error");
+  return hasOpenError ? "blocked" : "pass";
 }
 
 function defaultReviewSummary(session: Session, source: CodeReviewRequestSource): string {

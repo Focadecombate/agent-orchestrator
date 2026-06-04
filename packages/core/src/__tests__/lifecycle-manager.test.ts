@@ -94,6 +94,7 @@ describe("status decision helpers", () => {
         mergeable: false,
       },
       {
+        verification: "none",
         shouldEscalateIdleToStuck: false,
         idleWasBlocked: false,
         activityEvidence: "activity_signal=valid",
@@ -117,6 +118,7 @@ describe("status decision helpers", () => {
       ciStatus: "passing",
       reviewDecision: "pending",
       mergeable: false,
+      verification: "none",
       shouldEscalateIdleToStuck: false,
       idleWasBlocked: false,
       activityEvidence: "activity_signal=valid",

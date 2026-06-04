@@ -81,6 +81,7 @@ import {
   resolveProbeDecision,
   type LifecycleDecision,
 } from "./lifecycle-status-decisions.js";
+import { resolveSessionVerification } from "./code-review-manager.js";
 import {
   buildCIFailureNotificationData,
   buildPRStateNotificationData,
@@ -1318,6 +1319,7 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
           detectedIdleTimestamp !== null && hasPositiveIdleEvidence(activitySignal)
             ? isIdleBeyondThreshold(session, detectedIdleTimestamp)
             : false;
+        const verification = resolveSessionVerification({ config, project, session });
 
         if (cachedData) {
           // When session has multiple PRs, aggregate enrichment across all of them.
@@ -1359,6 +1361,7 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
               };
               return commit(
                 resolvePREnrichmentDecision(aggregated, {
+                  verification,
                   shouldEscalateIdleToStuck,
                   idleWasBlocked,
                   activityEvidence,
@@ -1371,6 +1374,7 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
           if (session.prs.length <= 1) {
             return commit(
               resolvePREnrichmentDecision(cachedData, {
+                verification,
                 shouldEscalateIdleToStuck,
                 idleWasBlocked,
                 activityEvidence,
@@ -1396,6 +1400,7 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
                   ciStatus: "none",
                   reviewDecision: "none",
                   mergeable: false,
+                  verification,
                   shouldEscalateIdleToStuck,
                   idleWasBlocked,
                   activityEvidence,
@@ -1411,6 +1416,7 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
                   ciStatus: "none",
                   reviewDecision: "none",
                   mergeable: false,
+                  verification,
                   shouldEscalateIdleToStuck,
                   idleWasBlocked,
                   activityEvidence,

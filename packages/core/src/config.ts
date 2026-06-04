@@ -248,6 +248,7 @@ const ReviewConfigSchema = z
   .object({
     agent: z.string().optional(),
     command: z.string().optional(),
+    url: z.string().url().optional(),
   })
   .strict()
   .refine((value) => !(value.agent && value.command), {

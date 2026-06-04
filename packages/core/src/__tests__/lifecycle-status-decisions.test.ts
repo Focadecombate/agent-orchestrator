@@ -3,9 +3,20 @@ import {
   createDetectingDecision,
   hashEvidence,
   isDetectingTimedOut,
+  resolvePRLiveDecision,
   DETECTING_MAX_ATTEMPTS,
   DETECTING_MAX_DURATION_MS,
 } from "../lifecycle-status-decisions.js";
+
+const MERGEABLE_OPEN_PR = {
+  prState: "open" as const,
+  ciStatus: "passing" as const,
+  reviewDecision: "none" as const,
+  mergeable: true,
+  shouldEscalateIdleToStuck: false,
+  idleWasBlocked: false,
+  activityEvidence: "",
+};
 
 describe("hashEvidence", () => {
   it("returns a 12-character hex string", () => {
@@ -214,5 +225,45 @@ describe("createDetectingDecision", () => {
 
       expect(result.detecting.startedAt).toBe(previousStartedAt);
     });
+  });
+});
+
+describe("verification gate (resolveOpenPRDecision via resolvePRLiveDecision)", () => {
+  it("reaches merge_ready when the gate is disabled (verification=none)", () => {
+    const result = resolvePRLiveDecision({ ...MERGEABLE_OPEN_PR, verification: "none" });
+
+    expect(result.status).toBe("mergeable");
+    expect(result.prReason).toBe("merge_ready");
+  });
+
+  it("reaches merge_ready when verification passes", () => {
+    const result = resolvePRLiveDecision({ ...MERGEABLE_OPEN_PR, verification: "pass" });
+
+    expect(result.status).toBe("mergeable");
+    expect(result.prReason).toBe("merge_ready");
+  });
+
+  it("withholds merge_ready and reports verifying while verification is pending", () => {
+    const result = resolvePRLiveDecision({ ...MERGEABLE_OPEN_PR, verification: "pending" });
+
+    expect(result.status).toBe("review_pending");
+    expect(result.prReason).toBe("verifying");
+    expect(result.sessionState).toBe("idle");
+  });
+
+  it("withholds merge_ready and requests changes when verification is blocked", () => {
+    const result = resolvePRLiveDecision({ ...MERGEABLE_OPEN_PR, verification: "blocked" });
+
+    expect(result.status).toBe("changes_requested");
+    expect(result.prReason).toBe("verification_failed");
+    expect(result.sessionState).toBe("working");
+    expect(result.sessionReason).toBe("resolving_review_comments");
+  });
+
+  it("does not reach merge_ready for any non-pass verdict", () => {
+    for (const verification of ["pending", "blocked"] as const) {
+      const result = resolvePRLiveDecision({ ...MERGEABLE_OPEN_PR, verification });
+      expect(result.prReason).not.toBe("merge_ready");
+    }
   });
 });

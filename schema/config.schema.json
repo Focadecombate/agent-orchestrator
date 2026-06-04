@@ -303,6 +303,11 @@
         "command": {
           "type": "string",
           "description": "Explicit shell command run in the reviewer workspace; its stdout is parsed for findings."
+        },
+        "url": {
+          "type": "string",
+          "format": "uri",
+          "description": "HTTP reviewer service endpoint. When set, enables the merge verification gate."
         }
       },
       "not": {

@@ -66,6 +66,8 @@ export type CanonicalPRReason =
   | "changes_requested"
   | "approved"
   | "merge_ready"
+  | "verifying"
+  | "verification_failed"
   | "merged"
   | "closed_unmerged"
   | "cleared_on_restore";
@@ -1371,6 +1373,8 @@ export interface ObservabilityConfig {
 export interface ReviewConfig {
   agent?: string;
   command?: string;
+  /** HTTP reviewer service endpoint. When set, enables the merge verification gate. */
+  url?: string;
 }
 
 export interface OrchestratorConfig {

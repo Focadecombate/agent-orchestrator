@@ -63,6 +63,11 @@ interface OpenPRDecisionInput {
   reviewDecision: PRReviewDecision;
   ciFailing: boolean;
   mergeable: boolean;
+  /**
+   * Merge verification gate verdict. `none` means the gate is disabled (no
+   * `review.url` configured) — behavior is then identical to pre-gate AO.
+   */
+  verification: "pass" | "blocked" | "pending" | "none";
   shouldEscalateIdleToStuck: boolean;
   idleWasBlocked: boolean;
   activityEvidence: string;
@@ -222,14 +227,40 @@ function resolveOpenPRDecision(input: OpenPRDecisionInput): LifecycleDecision {
 
   if (input.reviewDecision === "approved" || input.reviewDecision === "none") {
     if (input.mergeable) {
+      // Verification gate: only let the PR reach merge_ready when the gate is
+      // disabled (`none`) or it has passed. `pending`/`blocked` hold the PR.
+      if (input.verification === "pass" || input.verification === "none") {
+        return createLifecycleDecision({
+          status: SESSION_STATUS.MERGEABLE,
+          evidence: "merge_ready",
+          detecting: { attempts: 0 },
+          prState: "open",
+          prReason: "merge_ready",
+          sessionState: "idle",
+          sessionReason: "awaiting_external_review",
+        });
+      }
+
+      if (input.verification === "pending") {
+        return createLifecycleDecision({
+          status: SESSION_STATUS.REVIEW_PENDING,
+          evidence: "verifying",
+          detecting: { attempts: 0 },
+          prState: "open",
+          prReason: "verifying",
+          sessionState: "idle",
+          sessionReason: "awaiting_external_review",
+        });
+      }
+
       return createLifecycleDecision({
-        status: SESSION_STATUS.MERGEABLE,
-        evidence: "merge_ready",
+        status: SESSION_STATUS.CHANGES_REQUESTED,
+        evidence: "verification_failed",
         detecting: { attempts: 0 },
         prState: "open",
-        prReason: "merge_ready",
-        sessionState: "idle",
-        sessionReason: "awaiting_external_review",
+        prReason: "verification_failed",
+        sessionState: "working",
+        sessionReason: "resolving_review_comments",
       });
     }
 
@@ -351,7 +382,7 @@ export function resolvePREnrichmentDecision(
   cachedData: PREnrichmentData,
   options: Pick<
     OpenPRDecisionInput,
-    "shouldEscalateIdleToStuck" | "idleWasBlocked" | "activityEvidence"
+    "verification" | "shouldEscalateIdleToStuck" | "idleWasBlocked" | "activityEvidence"
   >,
 ): LifecycleDecision {
   const terminalDecision = resolveTerminalPRStateDecision(cachedData.state);
@@ -363,6 +394,7 @@ export function resolvePREnrichmentDecision(
     reviewDecision: cachedData.reviewDecision,
     ciFailing: cachedData.ciStatus === CI_STATUS.FAILING,
     mergeable: cachedData.mergeable,
+    verification: options.verification,
     shouldEscalateIdleToStuck: options.shouldEscalateIdleToStuck,
     idleWasBlocked: options.idleWasBlocked,
     activityEvidence: options.activityEvidence,
@@ -374,6 +406,7 @@ export function resolvePRLiveDecision(input: {
   ciStatus: CIStatus;
   reviewDecision: PRReviewDecision;
   mergeable: boolean;
+  verification: OpenPRDecisionInput["verification"];
   shouldEscalateIdleToStuck: boolean;
   idleWasBlocked: boolean;
   activityEvidence: string;
@@ -387,6 +420,7 @@ export function resolvePRLiveDecision(input: {
     reviewDecision: input.reviewDecision,
     ciFailing: input.ciStatus === CI_STATUS.FAILING,
     mergeable: input.mergeable,
+    verification: input.verification,
     shouldEscalateIdleToStuck: input.shouldEscalateIdleToStuck,
     idleWasBlocked: input.idleWasBlocked,
     activityEvidence: input.activityEvidence,
