@@ -17,6 +17,7 @@ import {
   closeVerificationDb,
   countRecentBlockedVerdicts,
   getAgentVerificationStats,
+  getLatestBlockedMemoryForIssue,
   getLatestVerification,
   isVerificationDbAvailable,
   listVerifications,
@@ -99,6 +100,39 @@ describe("verification-db", () => {
 
     const allClaude = listVerifications({ agent: "claude-code" });
     expect(allClaude.map((r) => r.sessionId)).toEqual(["c", "b"]);
+  });
+
+  it("returns the latest blocked memory for an issue across attempts", () => {
+    expect(getLatestBlockedMemoryForIssue("ISSUE-1")).toBeNull();
+
+    recordVerification(
+      { sessionId: "a-1", issueId: "ISSUE-1", verdict: "blocked", summary: "first attempt blocked" },
+      1_000,
+    );
+    recordVerification(
+      {
+        sessionId: "a-2",
+        issueId: "ISSUE-1",
+        verdict: "blocked",
+        summary: "second attempt: null deref in save.ts",
+      },
+      2_000,
+    );
+
+    expect(getLatestBlockedMemoryForIssue("ISSUE-1")).toBe(
+      "second attempt: null deref in save.ts",
+    );
+  });
+
+  it("ignores pass verdicts and empty summaries when reading blocked memory", () => {
+    recordVerification(
+      { sessionId: "b-1", issueId: "ISSUE-2", verdict: "blocked", summary: "real blocker" },
+      1_000,
+    );
+    recordVerification({ sessionId: "b-2", issueId: "ISSUE-2", verdict: "pass" }, 2_000);
+
+    // A later pass has no summary; the lookup still surfaces the last real blocker.
+    expect(getLatestBlockedMemoryForIssue("ISSUE-2")).toBe("real blocker");
   });
 
   it("counts consecutive blocked verdicts and resets the streak on a pass", () => {

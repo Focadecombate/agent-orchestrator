@@ -125,6 +125,27 @@ describe("buildPrompt", () => {
     expect(taskPrompt).toContain("Issue details were not pre-fetched");
   });
 
+  it("injects prior verification feedback when provided", () => {
+    const { systemPrompt } = buildPrompt({
+      project,
+      projectId: "test-app",
+      issueId: "INT-1343",
+      priorBlockedMemory: "- Null deref in save.ts (src/save.ts:12): drops failed writes",
+    });
+    expect(systemPrompt).toContain("## Prior Verification Feedback");
+    expect(systemPrompt).toContain("blocked by the verification gate");
+    expect(systemPrompt).toContain("Null deref in save.ts");
+  });
+
+  it("omits the prior verification section when no memory is provided", () => {
+    const { systemPrompt } = buildPrompt({
+      project,
+      projectId: "test-app",
+      issueId: "INT-1343",
+    });
+    expect(systemPrompt).not.toContain("## Prior Verification Feedback");
+  });
+
   it("includes project context", () => {
     const { systemPrompt } = buildPrompt({
       project,

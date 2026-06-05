@@ -92,6 +92,12 @@ export interface PromptBuildConfig {
   /** Pre-fetched issue context from tracker.generatePrompt() */
   issueContext?: string;
 
+  /**
+   * "Why blocked" memory from a prior verification-gate failure on this issue.
+   * Surfaced so a fresh attempt addresses past blockers instead of repeating them.
+   */
+  priorBlockedMemory?: string;
+
   /** Explicit user prompt (appended last) */
   userPrompt?: string;
 
@@ -109,7 +115,7 @@ export interface PromptBuildConfig {
 // =============================================================================
 
 function buildConfigLayer(config: PromptBuildConfig): string {
-  const { project, projectId, issueId, issueContext } = config;
+  const { project, projectId, issueId, issueContext, priorBlockedMemory } = config;
   const lines: string[] = [];
 
   lines.push("## Project Context");
@@ -135,6 +141,14 @@ function buildConfigLayer(config: PromptBuildConfig): string {
   if (issueContext) {
     lines.push(`\n## Issue Details`);
     lines.push(issueContext);
+  }
+
+  if (priorBlockedMemory) {
+    lines.push(`\n## Prior Verification Feedback`);
+    lines.push(
+      "A previous attempt at this issue was blocked by the verification gate. Address these before re-submitting:",
+    );
+    lines.push(priorBlockedMemory);
   }
 
   // Include reaction rules so the agent knows what to expect

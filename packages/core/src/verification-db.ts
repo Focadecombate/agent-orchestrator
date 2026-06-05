@@ -38,6 +38,8 @@ export type VerificationVerdict = "pass" | "blocked" | "pending";
 export interface VerificationRecordInput {
   projectId?: string;
   sessionId: string;
+  /** Stable issue id, so a fresh attempt at the same issue can read prior verdicts. */
+  issueId?: string;
   prNumber?: number;
   /** Which agent/model WROTE the code under review (the eval dimension). */
   agent?: string;
@@ -49,6 +51,8 @@ export interface VerificationRecordInput {
   infoCount?: number;
   /** Per-lens votes, e.g. { correctness: "pass", security: "fail" }. Stored as JSON. */
   lensVotes?: Record<string, string>;
+  /** Human-readable "why blocked" summary, surfaced to the next attempt's prompt. */
+  summary?: string;
   /** Retry counter for re-verification loops. */
   attempt?: number;
   durationMs?: number;
@@ -61,6 +65,7 @@ export interface VerificationRecord {
   tsEpoch: number;
   projectId: string | null;
   sessionId: string;
+  issueId: string | null;
   prNumber: number | null;
   agent: string | null;
   verifier: string | null;
@@ -69,6 +74,7 @@ export interface VerificationRecord {
   warningCount: number;
   infoCount: number;
   lensVotes: Record<string, string> | null;
+  summary: string | null;
   attempt: number;
   durationMs: number | null;
   targetSha: string | null;
@@ -105,6 +111,7 @@ function initSchema(db: BetterSqlite3Database): void {
       ts_epoch      INTEGER NOT NULL,
       project_id    TEXT,
       session_id    TEXT NOT NULL,
+      issue_id      TEXT,
       pr_number     INTEGER,
       agent         TEXT,
       verifier      TEXT,
@@ -113,6 +120,7 @@ function initSchema(db: BetterSqlite3Database): void {
       warning_count INTEGER DEFAULT 0,
       info_count    INTEGER DEFAULT 0,
       lens_votes    TEXT,
+      summary       TEXT,
       attempt       INTEGER DEFAULT 1,
       duration_ms   INTEGER,
       target_sha    TEXT,
@@ -123,6 +131,16 @@ function initSchema(db: BetterSqlite3Database): void {
     CREATE INDEX IF NOT EXISTS idx_v_agent   ON verifications(agent);
     CREATE INDEX IF NOT EXISTS idx_v_project ON verifications(project_id);
   `);
+}
+
+/** Add a column to an existing table only when it is missing (idempotent migration). */
+function ensureColumn(db: BetterSqlite3Database, name: string, type: string): void {
+  const columns = (
+    db.prepare(`PRAGMA table_info(verifications)`).all() as { name: string }[]
+  ).map((column) => column.name);
+  if (!columns.includes(name)) {
+    db.exec(`ALTER TABLE verifications ADD COLUMN ${name} ${type}`);
+  }
 }
 
 function openDb(): BetterSqlite3Database {
@@ -136,8 +154,13 @@ function openDb(): BetterSqlite3Database {
 
   const version = db.pragma("user_version", { simple: true }) as number;
   initSchema(db);
-  if (version < 1) {
-    db.pragma("user_version = 1");
+  // v2 added issue_id + summary (verifier "why blocked" memory). ALTER for DBs
+  // created at v1; fresh DBs already have the columns from initSchema.
+  ensureColumn(db, "issue_id", "TEXT");
+  ensureColumn(db, "summary", "TEXT");
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_v_issue ON verifications(issue_id)`);
+  if (version < 2) {
+    db.pragma("user_version = 2");
   }
 
   return db;
@@ -227,6 +250,7 @@ function rowToRecord(row: Record<string, unknown>): VerificationRecord {
     tsEpoch: row["ts_epoch"] as number,
     projectId: (row["project_id"] as string | null) ?? null,
     sessionId: row["session_id"] as string,
+    issueId: (row["issue_id"] as string | null) ?? null,
     prNumber: (row["pr_number"] as number | null) ?? null,
     agent: (row["agent"] as string | null) ?? null,
     verifier: (row["verifier"] as string | null) ?? null,
@@ -235,6 +259,7 @@ function rowToRecord(row: Record<string, unknown>): VerificationRecord {
     warningCount: (row["warning_count"] as number | null) ?? 0,
     infoCount: (row["info_count"] as number | null) ?? 0,
     lensVotes,
+    summary: (row["summary"] as string | null) ?? null,
     attempt: (row["attempt"] as number | null) ?? 1,
     durationMs: (row["duration_ms"] as number | null) ?? null,
     targetSha: (row["target_sha"] as string | null) ?? null,
@@ -256,15 +281,16 @@ export function recordVerification(
   const result = db
     .prepare(
       `INSERT INTO verifications
-         (ts_epoch, project_id, session_id, pr_number, agent, verifier, verdict,
-          error_count, warning_count, info_count, lens_votes, attempt, duration_ms,
+         (ts_epoch, project_id, session_id, issue_id, pr_number, agent, verifier, verdict,
+          error_count, warning_count, info_count, lens_votes, summary, attempt, duration_ms,
           target_sha, base_sha)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       tsEpoch,
       input.projectId ?? null,
       input.sessionId,
+      input.issueId ?? null,
       input.prNumber ?? null,
       input.agent ?? null,
       input.verifier ?? null,
@@ -273,6 +299,7 @@ export function recordVerification(
       input.warningCount ?? 0,
       input.infoCount ?? 0,
       input.lensVotes ? JSON.stringify(input.lensVotes) : null,
+      input.summary ?? null,
       input.attempt ?? 1,
       input.durationMs ?? null,
       input.targetSha ?? null,
@@ -285,6 +312,7 @@ export function recordVerification(
     tsEpoch,
     projectId: input.projectId ?? null,
     sessionId: input.sessionId,
+    issueId: input.issueId ?? null,
     prNumber: input.prNumber ?? null,
     agent: input.agent ?? null,
     verifier: input.verifier ?? null,
@@ -293,6 +321,7 @@ export function recordVerification(
     warningCount: input.warningCount ?? 0,
     infoCount: input.infoCount ?? 0,
     lensVotes: input.lensVotes ?? null,
+    summary: input.summary ?? null,
     attempt: input.attempt ?? 1,
     durationMs: input.durationMs ?? null,
     targetSha: input.targetSha ?? null,
@@ -336,6 +365,26 @@ export function countRecentBlockedVerdicts(sessionId: string): number {
     // 'pending' rows don't break the streak and aren't counted
   }
   return streak;
+}
+
+/**
+ * Most recent "why blocked" summary for an issue, across all attempts/sessions.
+ * Lets a fresh attempt at the same issue read why prior attempts were blocked.
+ * Null when there's no blocked verdict with a summary (or the store is unavailable).
+ */
+export function getLatestBlockedMemoryForIssue(issueId: string): string | null {
+  const db = getVerificationDb();
+  if (!db) return null;
+
+  const rows = db
+    .prepare(
+      `SELECT summary FROM verifications
+        WHERE issue_id = ? AND verdict = 'blocked' AND summary IS NOT NULL AND summary != ''
+        ORDER BY ts_epoch DESC, id DESC LIMIT 1`,
+    )
+    .all(issueId) as { summary: string }[];
+
+  return rows.length > 0 ? rows[0].summary : null;
 }
 
 /** History query for the eval/leaderboard. Newest first. Empty when store unavailable. */

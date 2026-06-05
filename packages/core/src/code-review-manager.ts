@@ -979,6 +979,23 @@ function countFindingsBySeverity(findings: CodeReviewRunnerFinding[]): {
   return counts;
 }
 
+const MAX_BLOCKING_FINDINGS_IN_SUMMARY = 10;
+
+/** Concise "why blocked" memory built from the error-severity findings, for the next attempt. */
+function summarizeBlockingFindings(findings: CodeReviewRunnerFinding[]): string {
+  return findings
+    .filter((finding) => (finding.severity ?? "warning") === "error")
+    .slice(0, MAX_BLOCKING_FINDINGS_IN_SUMMARY)
+    .map((finding) => {
+      const location = finding.filePath
+        ? ` (${finding.filePath}${finding.startLine ? `:${finding.startLine}` : ""})`
+        : "";
+      const body = finding.body ? `: ${finding.body}` : "";
+      return `- ${finding.title ?? "Finding"}${location}${body}`;
+    })
+    .join("\n");
+}
+
 /** Verdict of the merge verification gate. `none` means the gate is disabled. */
 export type VerificationVerdict = "pass" | "blocked" | "pending" | "none";
 
@@ -1291,18 +1308,21 @@ export async function executeCodeReviewRun(
     // telemetry — never let a store failure fail the review run.
     if (isVerificationGateEnabled(config, project)) {
       const counts = countFindingsBySeverity(findings);
+      const verdict = counts.error > 0 ? "blocked" : "pass";
       const startedMs = run.startedAt ? Date.parse(run.startedAt) : NaN;
       recordVerdict(
         {
           projectId,
           sessionId: session.id,
+          issueId: session.issueId ?? undefined,
           prNumber: run.prNumber ?? session.pr?.number,
           agent: session.metadata["agent"],
           verifier: resolveReviewerLabel({ config, project, command: reviewCommand }),
-          verdict: counts.error > 0 ? "blocked" : "pass",
+          verdict,
           errorCount: counts.error,
           warningCount: counts.warning,
           infoCount: counts.info,
+          summary: verdict === "blocked" ? summarizeBlockingFindings(findings) : undefined,
           targetSha: run.targetSha,
           baseSha: run.baseSha,
           durationMs: Number.isNaN(startedMs) ? undefined : completedAt.getTime() - startedMs,

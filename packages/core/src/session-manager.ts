@@ -69,6 +69,7 @@ import {
   parseCanonicalLifecycle,
 } from "./lifecycle-state.js";
 import { buildPrompt } from "./prompt-builder.js";
+import { getLatestBlockedMemoryForIssue } from "./verification-db.js";
 import { classifyActivitySignal, createActivitySignal } from "./activity-signal.js";
 import {
   getProjectSessionsDir,
@@ -1359,12 +1360,19 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       const orchestratorSessionId = `${project.sessionPrefix}-orchestrator`;
       const orchestratorExists = readMetadataRaw(sessionsDir, orchestratorSessionId) !== null;
 
+      // Carry "why blocked" memory from a prior verification failure on this issue
+      // into the fresh attempt's prompt (#2034, local-store variant).
+      const priorBlockedMemory = spawnConfig.issueId
+        ? (getLatestBlockedMemoryForIssue(spawnConfig.issueId) ?? undefined)
+        : undefined;
+
       const { systemPrompt, taskPrompt } = buildPrompt({
         project,
         projectId: spawnConfig.projectId,
         issueId: spawnConfig.issueId,
         issueContext,
         userPrompt: spawnConfig.prompt,
+        ...(priorBlockedMemory && { priorBlockedMemory }),
         ...(orchestratorExists && { orchestratorSessionId }),
       });
 

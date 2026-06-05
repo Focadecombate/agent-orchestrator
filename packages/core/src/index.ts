@@ -571,6 +571,7 @@ export type { ActivityEventFilter, ActivityEventStats } from "./query-activity-e
 export {
   recordVerification,
   getLatestVerification,
+  getLatestBlockedMemoryForIssue,
   listVerifications,
   countRecentBlockedVerdicts,
   getAgentVerificationStats,
