@@ -68,6 +68,11 @@ interface OpenPRDecisionInput {
    * `review.url` configured) — behavior is then identical to pre-gate AO.
    */
   verification: "pass" | "blocked" | "pending" | "none";
+  /**
+   * True when verification has been `blocked` for too many consecutive attempts.
+   * The gate then escalates to `stuck` instead of looping back to the worker.
+   */
+  verificationAttemptsExhausted?: boolean;
   shouldEscalateIdleToStuck: boolean;
   idleWasBlocked: boolean;
   activityEvidence: string;
@@ -253,6 +258,20 @@ function resolveOpenPRDecision(input: OpenPRDecisionInput): LifecycleDecision {
         });
       }
 
+      // verification === "blocked": after too many failed attempts, stop bouncing
+      // the PR back to the worker and escalate to stuck for human attention.
+      if (input.verificationAttemptsExhausted) {
+        return createLifecycleDecision({
+          status: SESSION_STATUS.STUCK,
+          evidence: "verification_failed_exhausted",
+          detecting: { attempts: 0 },
+          prState: "open",
+          prReason: "verification_failed",
+          sessionState: "stuck",
+          sessionReason: "error_in_process",
+        });
+      }
+
       return createLifecycleDecision({
         status: SESSION_STATUS.CHANGES_REQUESTED,
         evidence: "verification_failed",
@@ -382,7 +401,11 @@ export function resolvePREnrichmentDecision(
   cachedData: PREnrichmentData,
   options: Pick<
     OpenPRDecisionInput,
-    "verification" | "shouldEscalateIdleToStuck" | "idleWasBlocked" | "activityEvidence"
+    | "verification"
+    | "verificationAttemptsExhausted"
+    | "shouldEscalateIdleToStuck"
+    | "idleWasBlocked"
+    | "activityEvidence"
   >,
 ): LifecycleDecision {
   const terminalDecision = resolveTerminalPRStateDecision(cachedData.state);
@@ -395,6 +418,7 @@ export function resolvePREnrichmentDecision(
     ciFailing: cachedData.ciStatus === CI_STATUS.FAILING,
     mergeable: cachedData.mergeable,
     verification: options.verification,
+    verificationAttemptsExhausted: options.verificationAttemptsExhausted,
     shouldEscalateIdleToStuck: options.shouldEscalateIdleToStuck,
     idleWasBlocked: options.idleWasBlocked,
     activityEvidence: options.activityEvidence,
@@ -407,6 +431,7 @@ export function resolvePRLiveDecision(input: {
   reviewDecision: PRReviewDecision;
   mergeable: boolean;
   verification: OpenPRDecisionInput["verification"];
+  verificationAttemptsExhausted?: boolean;
   shouldEscalateIdleToStuck: boolean;
   idleWasBlocked: boolean;
   activityEvidence: string;
@@ -421,6 +446,7 @@ export function resolvePRLiveDecision(input: {
     ciFailing: input.ciStatus === CI_STATUS.FAILING,
     mergeable: input.mergeable,
     verification: input.verification,
+    verificationAttemptsExhausted: input.verificationAttemptsExhausted,
     shouldEscalateIdleToStuck: input.shouldEscalateIdleToStuck,
     idleWasBlocked: input.idleWasBlocked,
     activityEvidence: input.activityEvidence,

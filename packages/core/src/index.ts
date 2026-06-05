@@ -572,6 +572,7 @@ export {
   recordVerification,
   getLatestVerification,
   listVerifications,
+  countRecentBlockedVerdicts,
   getAgentVerificationStats,
   getVerificationDb,
   isVerificationDbAvailable,

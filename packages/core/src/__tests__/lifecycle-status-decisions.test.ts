@@ -260,6 +260,19 @@ describe("verification gate (resolveOpenPRDecision via resolvePRLiveDecision)", 
     expect(result.sessionReason).toBe("resolving_review_comments");
   });
 
+  it("escalates to stuck when blocked verification attempts are exhausted", () => {
+    const result = resolvePRLiveDecision({
+      ...MERGEABLE_OPEN_PR,
+      verification: "blocked",
+      verificationAttemptsExhausted: true,
+    });
+
+    expect(result.status).toBe("stuck");
+    expect(result.prReason).toBe("verification_failed");
+    expect(result.sessionState).toBe("stuck");
+    expect(result.evidence).toBe("verification_failed_exhausted");
+  });
+
   it("does not reach merge_ready for any non-pass verdict", () => {
     for (const verification of ["pending", "blocked"] as const) {
       const result = resolvePRLiveDecision({ ...MERGEABLE_OPEN_PR, verification });

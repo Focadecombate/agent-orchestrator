@@ -33,7 +33,14 @@ import {
 } from "./types.js";
 import { resolveAgentSelection } from "./agent-selection.js";
 import { getShell, isWindows, killProcessTree } from "./platform.js";
-import { recordVerification, type VerificationRecordInput } from "./verification-db.js";
+import {
+  countRecentBlockedVerdicts,
+  recordVerification,
+  type VerificationRecordInput,
+} from "./verification-db.js";
+
+/** Consecutive blocked verifications after which the gate escalates to stuck (re-verify cap). */
+export const MAX_VERIFICATION_ATTEMPTS = 5;
 
 const REVIEW_COMMAND_TIMEOUT_MS = 10 * 60_000;
 const REVIEW_COMMAND_MAX_BUFFER = 8 * 1024 * 1024;
@@ -1022,6 +1029,36 @@ export function resolveSessionVerification({
     .listFindings({ runId: latest.id, status: "open" })
     .some((finding) => finding.severity === "error");
   return hasOpenError ? "blocked" : "pass";
+}
+
+export interface VerificationGateState {
+  verdict: VerificationVerdict;
+  /** True when the session has hit {@link MAX_VERIFICATION_ATTEMPTS} consecutive blocked verdicts. */
+  attemptsExhausted: boolean;
+}
+
+/**
+ * Resolve the gate verdict plus whether re-verification is exhausted. When a PR
+ * keeps coming back blocked, escalate after {@link MAX_VERIFICATION_ATTEMPTS}
+ * instead of bouncing it back to the worker forever.
+ */
+export function resolveVerificationGate({
+  config,
+  project,
+  session,
+}: {
+  config: OrchestratorConfig;
+  project: ProjectConfig;
+  session: Session;
+}): VerificationGateState {
+  const verdict = resolveSessionVerification({ config, project, session });
+  if (verdict !== "blocked") {
+    return { verdict, attemptsExhausted: false };
+  }
+  return {
+    verdict,
+    attemptsExhausted: countRecentBlockedVerdicts(session.id) >= MAX_VERIFICATION_ATTEMPTS,
+  };
 }
 
 function defaultReviewSummary(session: Session, source: CodeReviewRequestSource): string {

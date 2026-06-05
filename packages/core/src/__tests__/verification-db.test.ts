@@ -15,6 +15,7 @@ vi.mock("../paths.js", async (importOriginal) => {
 
 import {
   closeVerificationDb,
+  countRecentBlockedVerdicts,
   getAgentVerificationStats,
   getLatestVerification,
   isVerificationDbAvailable,
@@ -98,6 +99,19 @@ describe("verification-db", () => {
 
     const allClaude = listVerifications({ agent: "claude-code" });
     expect(allClaude.map((r) => r.sessionId)).toEqual(["c", "b"]);
+  });
+
+  it("counts consecutive blocked verdicts and resets the streak on a pass", () => {
+    expect(countRecentBlockedVerdicts("s")).toBe(0);
+
+    recordVerification({ sessionId: "s", verdict: "blocked" }, 1_000);
+    recordVerification({ sessionId: "s", verdict: "blocked" }, 2_000);
+    expect(countRecentBlockedVerdicts("s")).toBe(2);
+
+    // a pass resets the streak; later blocks count from there
+    recordVerification({ sessionId: "s", verdict: "pass" }, 3_000);
+    recordVerification({ sessionId: "s", verdict: "blocked" }, 4_000);
+    expect(countRecentBlockedVerdicts("s")).toBe(1);
   });
 
   it("computes per-agent pass rates excluding pending from the denominator", () => {

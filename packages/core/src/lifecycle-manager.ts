@@ -81,7 +81,7 @@ import {
   resolveProbeDecision,
   type LifecycleDecision,
 } from "./lifecycle-status-decisions.js";
-import { resolveSessionVerification } from "./code-review-manager.js";
+import { resolveVerificationGate } from "./code-review-manager.js";
 import {
   buildCIFailureNotificationData,
   buildPRStateNotificationData,
@@ -1319,7 +1319,8 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
           detectedIdleTimestamp !== null && hasPositiveIdleEvidence(activitySignal)
             ? isIdleBeyondThreshold(session, detectedIdleTimestamp)
             : false;
-        const verification = resolveSessionVerification({ config, project, session });
+        const { verdict: verification, attemptsExhausted: verificationAttemptsExhausted } =
+          resolveVerificationGate({ config, project, session });
 
         if (cachedData) {
           // When session has multiple PRs, aggregate enrichment across all of them.
@@ -1362,6 +1363,7 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
               return commit(
                 resolvePREnrichmentDecision(aggregated, {
                   verification,
+                  verificationAttemptsExhausted,
                   shouldEscalateIdleToStuck,
                   idleWasBlocked,
                   activityEvidence,
@@ -1375,6 +1377,7 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
             return commit(
               resolvePREnrichmentDecision(cachedData, {
                 verification,
+                verificationAttemptsExhausted,
                 shouldEscalateIdleToStuck,
                 idleWasBlocked,
                 activityEvidence,
@@ -1401,6 +1404,7 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
                   reviewDecision: "none",
                   mergeable: false,
                   verification,
+                  verificationAttemptsExhausted,
                   shouldEscalateIdleToStuck,
                   idleWasBlocked,
                   activityEvidence,
@@ -1417,6 +1421,7 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
                   reviewDecision: "none",
                   mergeable: false,
                   verification,
+                  verificationAttemptsExhausted,
                   shouldEscalateIdleToStuck,
                   idleWasBlocked,
                   activityEvidence,

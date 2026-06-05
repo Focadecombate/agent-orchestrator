@@ -314,6 +314,30 @@ export function getLatestVerification(sessionId: string): VerificationRecord | n
   return rows.length > 0 ? rowToRecord(rows[0]) : null;
 }
 
+/**
+ * Number of consecutive `blocked` verdicts for a session, counting back from the
+ * latest until a `pass` is hit (a pass resets the streak). Drives the re-verify
+ * retry cap so a PR can't bounce back to the agent forever. 0 if store unavailable.
+ */
+export function countRecentBlockedVerdicts(sessionId: string): number {
+  const db = getVerificationDb();
+  if (!db) return 0;
+
+  const rows = db
+    .prepare(
+      `SELECT verdict FROM verifications WHERE session_id = ? ORDER BY ts_epoch DESC, id DESC`,
+    )
+    .all(sessionId) as { verdict: VerificationVerdict }[];
+
+  let streak = 0;
+  for (const row of rows) {
+    if (row.verdict === "blocked") streak++;
+    else if (row.verdict === "pass") break;
+    // 'pending' rows don't break the streak and aren't counted
+  }
+  return streak;
+}
+
 /** History query for the eval/leaderboard. Newest first. Empty when store unavailable. */
 export function listVerifications(filter: ListVerificationsFilter = {}): VerificationRecord[] {
   const db = getVerificationDb();
